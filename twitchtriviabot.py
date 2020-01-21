@@ -14,6 +14,8 @@ import socket
 
 import pandas as pd
 
+from editdistance import DistanceAlgorithm, EditDistance
+
 POS = ["1st", "2nd", "3rd"]
 #######################################################################
 # SETTINGS
@@ -59,9 +61,9 @@ class Var:
     # upon trivia. [1,2,3] 1: Session score 2: Total trivia points
     # 3: Total wins
     userscores = {}
-    COMMANDLIST = ["!triviastart", "!triviaend", "!top3", "!hint", "!bonus",
-                   "!score", "!next", "!stop", "!loadconfig",
-                   "!backuptrivia", "!loadtrivia", "!creator"]
+    COMMANDLIST = ["!triviastart", "!triviaend", "!top3", "!bonus", "!score",
+                   "!next", "!stop", "!loadconfig", "!backuptrivia",
+                   "!loadtrivia", "!creator"]
     # Switch to keep bot connection running
     SWITCH = True
     # Switch for when trivia is being played
@@ -82,6 +84,16 @@ class Var:
     bonus_round = 0
     # Ongoing active timer
     TIMER = 0
+    # Distance comparer
+    comparer = None
+
+    @classmethod
+    def is_game_over(cls):
+        return cls.num_qs == cls.q_no
+
+    @classmethod
+    def exceed_time(cls, timing):
+        return cls.TIMER - cls.ask_time > timing
 
 # Variables for IRC / Twitch chat function
 class ChatVar:
@@ -93,6 +105,14 @@ class ChatVar:
     # messages per second
     RATE = (120)
     CHAT_MSG = re.compile(r"^:\w+!\w+@\w+\.tmi\.twitch\.tv PRIVMSG #\w+ :")
+
+#######################################################################
+# Helper functions
+#######################################################################
+def fuzzy_match(idx, message):
+    return (Var.comparer.compare(Var.qs.iloc[Var.q_no, idx].lower(),
+                                 message.strip().lower(), 2 ** 31 - 1) /
+            len(Var.qs.iloc[Var.q_no, idx]) < 0.4)
 
 #######################################################################
 # CODE
@@ -128,6 +148,7 @@ def trivia_start():
             Var.ts.drop(Var.ts.index[[row_idx]])
     print("Quizset built.")
     Var.is_active = True
+    Var.comparer = EditDistance(DistanceAlgorithm.DAMERUAUOSA)
     send_msg(f"Trivia has begun! Question Count: {Var.num_qs}. "
              f"Trivia will start in {Var.delay} seconds.")
     time.sleep(Var.delay)
@@ -207,11 +228,6 @@ def trivia_commandswitch(cleanmessage, username):
                 msg = " ".join(f"{POS[i]} place: {score[0]} {score[1]} points."
                                for i, score in enumerate(topscore))
             send_msg(msg)
-        if cleanmessage == "!hint":
-            if Var.hint_req in (0, 1):
-                trivia_askhint(0)
-            elif Var.hint_req == 2:
-                trivia_askhint(1)
 
         if cleanmessage == "!bonus":
             if Var.bonus_round == 0:
@@ -257,8 +273,8 @@ def trivia_answer(username):
     Var.question_asked = False
     Var.ask_time = 0
     trivia_savebackup()
-    # End game check
-    if Var.num_qs == Var.q_no:
+
+    if Var.is_game_over():
         trivia_end()
     else:
         print("Next question called...")
@@ -289,6 +305,7 @@ def trivia_end():
     # reset variables for trivia
     Var.q_no = 0
     Var.is_active = False
+    Var.comparer = None
     Var.hint_req = 0
     Var.question_asked = False
     Var.ask_time = 0
@@ -303,25 +320,27 @@ def trivia_end():
 def trivia_routinechecks():
     Var.TIMER = round(time.time())
 
-    # End game check
-    if Var.num_qs == Var.q_no:
+    if Var.is_game_over():
         trivia_end()
 
     if Var.is_active and Var.question_asked:
-        if Var.TIMER - Var.ask_time > Var.hint_time_2 and Var.hint_req == 1:
+        if Var.exceed_time(Var.hint_time_2) and Var.hint_req == 1:
             Var.hint_req = 2
             trivia_askhint(1)  # Ask second hint
-        elif Var.TIMER - Var.ask_time > Var.hint_time_1 and Var.hint_req == 0:
+        elif Var.exceed_time(Var.hint_time_1) and Var.hint_req == 0:
             Var.hint_req = 1
             trivia_askhint(0)  # Ask first hint
-        elif Var.TIMER - Var.ask_time > Var.skiptime:
+        elif Var.exceed_time(Var.skiptime):
             trivia_skipquestion()
 
 # hinttype: 0 = 1st hint, 1 = 2nd hint
 def trivia_askhint(hinttype=0):
     prehint = Var.qs.iloc[Var.q_no, 2]
     if hinttype == 0:  # replace 2 out of 3 chars with _
-        hint = "".join("_" if i % 3 > 0 else c for i, c in enumerate(prehint))
+        n = len(prehint)
+        idx = random.sample(range(n), k=n // 3)
+        hint = "".join(c if i in idx or not c.isalnum() else "_"
+                       for i, c in enumerate(prehint))
         send_msg(f"Hint #1: {hint}")
     elif hinttype == 1:  # replace vowels with _
         hint = re.sub("[aeiou]", "_", prehint, flags=re.I)
@@ -340,8 +359,8 @@ def trivia_skipquestion():
         Var.question_asked = False
         Var.ask_time = 0
         time.sleep(Var.delay)
-        # End game check
-        if Var.num_qs == Var.q_no:
+
+        if Var.is_game_over():
             trivia_end()
         else:
             trivia_callquestion()
@@ -512,10 +531,10 @@ def scanloop():
             trivia_commandswitch(cleanmessage, username)
             time.sleep(1)
         try:
-            if (re.match(f"\\b{Var.qs.iloc[Var.q_no, 2]}\\b", message,
-                         re.IGNORECASE) is not None or
-                    re.match(f"\\b{Var.qs.iloc[Var.q_no, 3]}\\b", message,
-                             re.IGNORECASE) is not None):
+            if fuzzy_match(2, message):
+                print("Answer recognized.")
+                trivia_answer(username)
+            if fuzzy_match(3, message):
                 print("Answer recognized.")
                 trivia_answer(username)
         except:

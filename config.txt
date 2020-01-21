@@ -1,20 +1,19 @@
-[Trivia Settings]
-trivia_filename = triviaset
-trivia_filetype = csv
-trivia_questions = 25
-trivia_hinttime_1 = 30
-trivia_hinttime_2 = 60
-trivia_skiptime = 90
-trivia_questiondelay = 8
-trivia_bonusvalue = 3
+[Trivia]
+filename = triviaset
+filetype = csv
+num_qs = 25
+hint_time_1 = 30
+hint_time_2 = 60
+skiptime = 90
+delay = 8
+bonus_value = 3
 
-[Admin Settings]
+[Admin]
 admins = [ADD ADMINS]
 
-[Bot Settings]
+[Bot]
 host = irc.twitch.tv
 port = 6667
 nick = [ADD BOT NICKNAME]
 pass = [ADD OAUTH]
 chan = [ADD CHANNEL TO CONNECT]
-
